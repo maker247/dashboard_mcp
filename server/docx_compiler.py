@@ -5,13 +5,156 @@ Performs 100% in-memory compilation without creating database records in Odoo.
 """
 
 import io
+import logging
 from typing import Optional
 import docx
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn, nsdecls
+
+_logger = logging.getLogger(__name__)
+
+
+def _build_leads_by_phase_chart(leads_by_stage: list, week_info: dict) -> Optional[bytes]:
+    """
+    Generates a bar chart PNG (in-memory bytes) showing leads count per pipeline phase.
+    Uses live data from get_weekly_bsc_data()['p2_pipeline']['leads_by_stage'].
+    Returns None if matplotlib is unavailable.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend, safe for server use
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
+        import numpy as np
+    except ImportError:
+        _logger.warning("matplotlib not installed — skipping chart generation.")
+        return None
+
+    if not leads_by_stage:
+        return None
+
+    phases = [r.get('phase', '') for r in leads_by_stage]
+    counts = [r.get('count', 0) for r in leads_by_stage]
+
+    # Blue gradient palette (light → dark) matching the template style
+    base_colors = [
+        '#AEC6E8', '#7BAFD4', '#5499C9', '#2E75B6', '#1F4E79',
+        '#163D6A', '#0D2D5E', '#071E45',
+    ]
+    colors = [base_colors[i % len(base_colors)] for i in range(len(phases))]
+
+    fig, ax = plt.subplots(figsize=(9, 4.5), dpi=130)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    x_pos = np.arange(len(phases))
+    bars = ax.bar(x_pos, counts, color=colors, width=0.55, zorder=3)
+
+    # Annotate each bar with count (bold) and estimated value above
+    for bar, row in zip(bars, leads_by_stage):
+        h = bar.get_height()
+        val = row.get('value', row.get('open_value', 0))
+        if val:
+            val_str = f"฿{val:,.0f}"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + max(counts) * 0.03,
+                val_str,
+                ha='center', va='bottom',
+                fontsize=7.5, color='#555555',
+            )
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            h / 2,
+            str(int(h)) if h > 0 else '',
+            ha='center', va='center',
+            fontsize=11, fontweight='bold', color='white',
+        )
+
+    # Labels and title
+    start = week_info.get('start_date', '')
+    year = week_info.get('year', '')
+    title = f"Leads by Phase — open pipeline since 1 Jan {year} (as of {start})"
+    ax.set_title(title, fontsize=11, fontweight='bold', pad=12, color='#1a1a2e')
+    ax.set_ylabel('Number of leads', fontsize=9, color='#333333')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(phases, fontsize=9, color='#333333')
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax.set_ylim(0, max(counts) * 1.25 if counts else 5)
+    ax.tick_params(axis='y', colors='#555555')
+
+    # Grid lines only on Y
+    ax.yaxis.grid(True, linestyle='--', linewidth=0.5, color='#dddddd', zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.5)
+    ax.spines['bottom'].set_linewidth(0.5)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight', dpi=130)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _build_pipeline_by_sp_chart(sp_pipeline: list, week_info: dict) -> Optional[bytes]:
+    """
+    Generates a horizontal bar chart showing open pipeline value per salesperson.
+    Returns None if matplotlib is unavailable.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
+    except ImportError:
+        return None
+
+    if not sp_pipeline:
+        return None
+
+    # Sort descending by value, take top 10
+    sorted_sp = sorted(sp_pipeline, key=lambda x: x.get('open_value', 0), reverse=True)[:10]
+    names = [r.get('salesperson', 'Unknown') for r in sorted_sp]
+    values = [r.get('open_value', 0.0) for r in sorted_sp]
+
+    fig, ax = plt.subplots(figsize=(9, max(3.5, len(names) * 0.55)), dpi=130)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    y_pos = range(len(names))
+    bars = ax.barh(list(y_pos), values, color='#2E75B6', height=0.6, zorder=3)
+
+    for bar, row in zip(bars, sorted_sp):
+        w = bar.get_width()
+        ax.text(
+            w + max(values) * 0.01, bar.get_y() + bar.get_height() / 2,
+            f"฿{w:,.0f}  ({row.get('open_leads', 0)} leads)",
+            va='center', fontsize=8, color='#333333'
+        )
+
+    ax.set_yticks(list(y_pos))
+    ax.set_yticklabels(names, fontsize=9)
+    ax.invert_yaxis()
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'฿{x/1e6:.1f}M' if x >= 1e6 else f'฿{x:,.0f}'))
+    ax.set_xlabel('Open Pipeline Value (THB)', fontsize=9)
+    ax.set_title('Open Pipeline by Salesperson', fontsize=11, fontweight='bold', pad=10, color='#1a1a2e')
+    ax.xaxis.grid(True, linestyle='--', linewidth=0.5, color='#dddddd', zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight', dpi=130)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
 
 
 def set_cell_properties(cell, width_dxa=None, fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100):
@@ -431,6 +574,56 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
                     format_cell_text(c1, format_currency(r_data.get("actual")), bold=is_summary, font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
                 p._p.addnext(tbl_new._tbl)
+                break
+
+    # 11. Dynamic Charts — inject generated PNG images into the document
+    p2_data = data.get('p2_pipeline', {})
+    week_info_chart = data.get('week_info', {})
+
+    # 11a. Leads by Phase chart
+    leads_by_stage = p2_data.get('leads_by_stage', [])
+    chart_png = _build_leads_by_phase_chart(leads_by_stage, week_info_chart)
+    if chart_png:
+        # Try to replace the first inline image (shape) that acts as chart placeholder;
+        # if none found, add the chart as a new paragraph before the salesperson table.
+        chart_inserted = False
+        # Look for a paragraph that contains a drawing/image placeholder for the pipeline chart
+        for p in doc.paragraphs:
+            if 'leads_by_phase' in p.text.lower() or 'pipeline chart' in p.text.lower():
+                p.clear()
+                run = p.add_run()
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+                chart_inserted = True
+                break
+
+        if not chart_inserted:
+            # Append chart after the last leads table (Table index 5) if it exists
+            if len(doc.tables) > 5:
+                tbl_anchor = doc.tables[5]
+                # Insert a new paragraph after the table
+                new_para = OxmlElement('w:p')
+                tbl_anchor._tbl.addnext(new_para)
+                from docx.text.paragraph import Paragraph as DocxParagraph
+                p_obj = DocxParagraph(new_para, doc)
+                p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p_obj.add_run()
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+            else:
+                # Last resort — just append to document
+                p_obj = doc.add_paragraph()
+                p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p_obj.add_run()
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+
+    # 11b. Pipeline by salesperson chart
+    sp_pipeline = p2_data.get('open_pipeline_by_salesperson', [])
+    sp_chart_png = _build_pipeline_by_sp_chart(sp_pipeline, week_info_chart)
+    if sp_chart_png:
+        for p in doc.paragraphs:
+            if 'pipeline_by_sp' in p.text.lower() or 'salesperson chart' in p.text.lower():
+                p.clear()
+                run = p.add_run()
+                run.add_picture(io.BytesIO(sp_chart_png), width=Inches(6.5))
                 break
 
     out_io = io.BytesIO()
