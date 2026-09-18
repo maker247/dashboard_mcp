@@ -1,0 +1,28 @@
+{
+  "folders": [
+    {
+      "name": "Dashboard MCP (Server)",
+      "path": "/home/kokyaw/Sites/dashboard_mcp"
+    },
+    {
+      "name": "Dashboard MCP (Client)",
+      "path": "/home/kokyaw/Sites/dashboard_mcp_client"
+    },
+    {
+      "name": "Odoo 17 ERP",
+      "path": "/home/kokyaw/Sites/odoo-17"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.git": true,
+      "**/.svn": true,
+      "**/.hg": true,
+      "**/CVS": true,
+      "**/.DS_Store": true,
+      "**/Thumbs.db": true,
+      "**/__pycache__": true,
+      "**/*.pyc": true
+    }
+  }
+}
