@@ -1,4 +1,4 @@
-# Standalone Odoo Dashboard Read-Only MCP Server & Client
+# Standalone Odoo Dashboard Read-Only MCP Server
 
 A high-performance, strictly **Read-Only** Model Context Protocol (MCP) server that connects Claude Desktop to live Odoo ERP dashboard metrics (Weekly Balanced Scorecard reports, P&L Actual vs Budget, Gross Margin by Service Lane, CRM Pipeline, and Helpdesk SLA metrics).
 
@@ -13,7 +13,7 @@ A high-performance, strictly **Read-Only** Model Context Protocol (MCP) server t
  └───────────┬────────────┘
              │ stdio (JSON-RPC)
  ┌───────────▼────────────┐
- │  odoo_mcp_client.py    │ (Lightweight, portable proxy)
+ │  odoo_mcp_client.py    │ (Lightweight, portable proxy via dashboard_mcp_client)
  └───────────┬────────────┘
              │ Office LAN HTTP / SSE (Port 8095)
 ═════════════╪═════════════════════════════════════════════════════════
@@ -31,7 +31,7 @@ A high-performance, strictly **Read-Only** Model Context Protocol (MCP) server t
 2. **Strict Read-Only**: Mutations (`create`, `write`, `unlink`, `copy`, `action_*`) are blocked at the MCP layer before hitting Odoo.
 3. **100% In-Memory DOCX Generation**: Word reports (`.docx`) are compiled completely in memory using `python-docx` and returned as binary base64 data. No records or attachments (`ir.attachment`) are ever created in Odoo.
 4. **Office Network Restricted**: Deployed on dedicated port `8095`, accessible only within the internal office subnet.
-5. **Portable Client Proxy**: Coworkers only need Python and the `client/odoo_mcp_client.py` script to connect Claude Desktop to Odoo from their individual PCs.
+5. **Dedicated Client Repository**: Coworkers clone the lightweight [`dashboard_mcp_client`](https://github.com/maker247/dashboard_mcp_client) repository to connect Claude Desktop from their individual PCs without needing backend dependencies.
 
 ---
 
@@ -112,65 +112,27 @@ sudo systemctl enable --now odoo-mcp
 
 ## 💻 Client Setup (For Coworkers' PCs)
 
-Coworkers do **not** need Odoo or PostgreSQL installed on their PCs.
+Coworkers do **not** need to clone this backend server repository or install Odoo/PostgreSQL dependencies.
 
-### 1. Copy Client Files
-Copy the `client/` directory onto the coworker's PC (e.g. into `~/odoo_client/` or `C:\odoo_client\`).
+Client setup is fully packaged in the dedicated repository:
+👉 **[github.com/maker247/dashboard_mcp_client](https://github.com/maker247/dashboard_mcp_client)**
 
-### 2. Install Client Dependencies
-```bash
-pip install -r client/requirements.txt
-```
-*(Or simply `pip install mcp httpx`)*
+### Quick Client Setup Summary:
+1. **Clone the client repo:**
+   ```bash
+   git clone git@github.com:maker247/dashboard_mcp_client.git
+   cd dashboard_mcp_client
+   ```
+2. **Install minimal dependencies:**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
+3. **Configure Claude Desktop** using the sample in `sample_claude_config.json` pointing to `http://YOUR_ODOO_SERVER_IP:8095/sse`.
+4. **Restart Claude Desktop**. The hammer icon (🔨) will display all Odoo tools.
 
-### 3. Configure Claude Desktop
-Open the Claude Desktop configuration file:
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-Add the `odoo_dashboard` server definition:
-
-#### macOS Example:
-```json
-{
-  "mcpServers": {
-    "odoo_dashboard": {
-      "command": "python3",
-      "args": [
-        "/Users/USERNAME/odoo_client/odoo_mcp_client.py",
-        "--server",
-        "http://192.168.1.100:8095/sse"
-      ],
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
-    }
-  }
-}
-```
-
-#### Windows Example:
-```json
-{
-  "mcpServers": {
-    "odoo_dashboard": {
-      "command": "C:\\Users\\USERNAME\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
-      "args": [
-        "C:\\Users\\USERNAME\\odoo_client\\odoo_mcp_client.py",
-        "--server",
-        "http://192.168.1.100:8095/sse"
-      ],
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
-    }
-  }
-}
-```
-*(Replace `192.168.1.100` with the actual office IP or hostname of your Odoo server).*
-
-Restart Claude Desktop. You will now see the hammer icon 🔨 with all Odoo Dashboard tools!
+See the [Client Repository README](https://github.com/maker247/dashboard_mcp_client#readme) for OS-specific instructions (macOS, Windows, Linux) and troubleshooting.
 
 ---
 

@@ -30,10 +30,6 @@ odoo_dashboard_mcp/
 ├── run_server.sh           # Start the MCP server
 ├── AGENTS.md               # This file
 ├── README.md               # Setup guide
-├── client/
-│   ├── odoo_mcp_client.py  # Test client for tools
-│   ├── requirements.txt    # Client-only deps
-│   └── sample_claude_config.json  # Claude Desktop config template
 └── server/
     ├── app.py              # MCP server entry point — registers all tools
     ├── config.py           # Reads .env: ODOO_URL, ODOO_DB, ODOO_USER, ODOO_API_KEY
@@ -148,7 +144,7 @@ pip install -r requirements.txt
 ## When Modifying This Project
 
 1. **Never add write operations.** All `execute_kw` calls must only use `search`, `search_read`, `search_count`, `read`, or `fields_get`.
-2. **Test with the client:** `python3 client/odoo_mcp_client.py`
+2. **Test with the client:** Use the standalone [`dashboard_mcp_client`](https://github.com/maker247/dashboard_mcp_client) proxy: `python3 odoo_mcp_client.py`
 3. **Add new tools** by creating a function in the appropriate `server/tools/*.py` file decorated with `@mcp.tool()`, then register it in `server/app.py`.
 4. **Week numbers** are ISO week numbers (Mon=1, Sun=7). Always pass `year` alongside `week_number` to avoid year-boundary bugs.
 5. **Currency:** All monetary values are in THB (฿). Use `format_currency()` from `docx_compiler.py` for display.
