@@ -20,13 +20,28 @@ try:
     from mcp.server.mcpserver import MCPServer
     mcp = MCPServer(
         name=config.MCP_SERVER_NAME,
-        instructions="Read-only assistant for querying Odoo dashboards, Weekly Balanced Scorecards, P&L financials, CRM pipelines, and Helpdesk metrics.",
+        instructions="""
+        Infinity IT Group Odoo 17 Dashboard & Model Query MCP Server.
+        Strictly READ-ONLY. Provides comprehensive tools for:
+        1. Management Balanced Scorecard (BSC) and .docx compilation.
+        2. Executive Financials (P&L actual vs budget, Balance Sheet, Gross Margin).
+        3. CRM Pipeline and Sales Deal tracking.
+        4. Helpdesk Ticket metrics and resolution stats.
+        5. Direct read-only model querying (sale.order, account.move, account.move.line, mail.activity, crm.lead, res.partner, etc.).
+        6. Aggregate calculations (read_group) for revenue, expenses, and sales metrics.
+        
+        Currency: Thai Baht (THB / ฿).
+        Companies: Infinity IT Success Ltd. (ID: 1), Infinite IT Systems Ltd. (ID: 2).
+        """,
     )
 except ImportError:
     from mcp.server.fastmcp import FastMCP
     mcp = FastMCP(
         name=config.MCP_SERVER_NAME,
-        instructions="Read-only assistant for querying Odoo dashboards, Weekly Balanced Scorecards, P&L financials, CRM pipelines, and Helpdesk metrics.",
+        instructions="""
+        Infinity IT Group Odoo 17 Dashboard & Model Query MCP Server.
+        Strictly READ-ONLY.
+        """,
     )
 
 # Register all read-only tools
@@ -34,11 +49,13 @@ from .tools.bsc_reports import register_bsc_tools
 from .tools.financials import register_financial_tools
 from .tools.pipeline import register_pipeline_tools
 from .tools.helpdesk import register_helpdesk_tools
+from .tools.models import register_model_tools
 
 register_bsc_tools(mcp)
 register_financial_tools(mcp)
 register_pipeline_tools(mcp)
 register_helpdesk_tools(mcp)
+register_model_tools(mcp)
 
 
 def main():

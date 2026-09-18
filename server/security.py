@@ -18,6 +18,7 @@ READ_ONLY_ALLOWED_METHODS = {
     'fields_get',
     'name_get',
     'name_search',
+    'read_group',
     
     # Custom Read Services in infs_dashboard / custom addons
     'get_weekly_bsc_report_data',
