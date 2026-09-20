@@ -33,7 +33,7 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 PORT="${MCP_SERVER_PORT:-8095}"
-HOST="${MCP_SERVER_HOST:-127.0.0.1}"
+HOST="${MCP_SERVER_HOST:-0.0.0.0}"
 
 echo "Binding SSE Server to http://${HOST}:${PORT}/sse"
 echo "Authentication: Stateless / Client-provided (No server credentials)"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Odoo Dashboard Read-Only MCP Server (Office LAN)
+After=network.target
+
+[Service]
+Type=simple
+User=odoo
+Group=odoo
+WorkingDirectory=/opt/dashboard_mcp
+# Stateless backend: No .env credentials needed.
+# Binds to 0.0.0.0 so client PCs on the office LAN can connect.
+ExecStart=/opt/dashboard_mcp/.venv/bin/python -m server.app --host 0.0.0.0 --port 8095 --transport sse
+Restart=always
+RestartSec=5
+
+# Security hardening
+ProtectSystem=full
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

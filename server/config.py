@@ -15,7 +15,7 @@ if env_path.exists():
     load_dotenv(env_path)
 
 # Server daemon settings
-MCP_SERVER_HOST = os.getenv('MCP_SERVER_HOST', '127.0.0.1')
+MCP_SERVER_HOST = os.getenv('MCP_SERVER_HOST', '0.0.0.0')
 MCP_SERVER_PORT = int(os.getenv('MCP_SERVER_PORT', '8095'))
 MCP_SERVER_NAME = os.getenv('MCP_SERVER_NAME', 'odoo-dashboard-mcp')
 
