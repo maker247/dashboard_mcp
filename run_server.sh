@@ -27,15 +27,16 @@ echo " Python Binary: $PYTHON_BIN"
 echo " Directory:     $SCRIPT_DIR"
 echo "===================================================================="
 
-# Load .env if present
+# Load optional daemon overrides if .env is present (no credentials stored)
 if [ -f "$SCRIPT_DIR/.env" ]; then
     export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
 fi
 
 PORT="${MCP_SERVER_PORT:-8095}"
-HOST="${MCP_SERVER_HOST:-0.0.0.0}"
+HOST="${MCP_SERVER_HOST:-127.0.0.1}"
 
 echo "Binding SSE Server to http://${HOST}:${PORT}/sse"
+echo "Authentication: Stateless / Client-provided (No server credentials)"
 echo "Strict Read-Only mode is enforced."
 echo "Press Ctrl+C to terminate."
 echo "===================================================================="

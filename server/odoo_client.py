@@ -1,16 +1,31 @@
 # -*- coding: utf-8 -*-
 """
 Odoo XML-RPC Client Wrapper with Read-Only Enforcement & Dynamic Per-Client Auth.
+Stateless Backend: All user credentials must be supplied dynamically by the client.
 """
 
 import os
 import xmlrpc.client
 import logging
+import contextvars
 from typing import Any, Dict, List, Optional, Tuple
 from . import config
 from .security import assert_read_only
 
+try:
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:
+    try:
+        from mcp.server.fastmcp.exceptions import ToolError
+    except ImportError:
+        ToolError = PermissionError
+
 _logger = logging.getLogger(__name__)
+
+# ContextVar capturing client request headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
+current_client_headers: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
+    "current_client_headers", default={}
+)
 
 
 def resolve_connection(
@@ -23,33 +38,41 @@ def resolve_connection(
     """
     Resolves target Odoo connection parameters (URL, DB, User, API Key)
     dynamically from the client's request headers forwarded over SSE.
+    Backend server does not store or fall back to any master .env credentials.
     """
-    headers: Dict[str, str] = {}
+    # Start with request headers captured by middleware for this async task
+    headers: Dict[str, str] = dict(current_client_headers.get() or {})
+
+    # If ctx was passed explicitly, check for headers
     if ctx is not None:
         try:
-            # When ctx is an MCP Context object
-            if getattr(ctx, "_request_context", None) is not None:
-                raw = ctx.headers or {}
-                headers = {k.lower(): str(v) for k, v in raw.items()}
+            if hasattr(ctx, "headers") and ctx.headers:
+                headers.update({k.lower(): str(v) for k, v in ctx.headers.items()})
+            elif getattr(ctx, "_request_context", None) is not None:
+                raw = getattr(ctx, "headers", {}) or {}
+                headers.update({k.lower(): str(v) for k, v in raw.items()})
             elif isinstance(ctx, dict):
-                headers = {k.lower(): str(v) for k, v in ctx.items()}
+                headers.update({k.lower(): str(v) for k, v in ctx.items()})
         except Exception as e:
             _logger.debug("Could not extract headers from context: %s", e)
 
-    target_user = user or headers.get("x-odoo-user") or os.getenv("ODOO_USER")
-    target_key = api_key or headers.get("x-odoo-api-key") or os.getenv("ODOO_API_KEY")
-    target_db = db or headers.get("x-odoo-db") or os.getenv("ODOO_DB")
-    target_url = url or headers.get("x-odoo-url") or os.getenv("ODOO_URL") or "http://localhost:8069"
-    target_url = target_url.rstrip('/')
+    # Strictly require credentials from client request (NO server-side fallback)
+    target_user = user or headers.get("x-odoo-user")
+    target_key = api_key or headers.get("x-odoo-api-key")
+    target_db = db or headers.get("x-odoo-db") or getattr(config, "ODOO_DB", None)
+    target_url = url or headers.get("x-odoo-url") or getattr(config, "ODOO_URL", "http://localhost:8069")
+    if target_url:
+        target_url = target_url.rstrip('/')
 
     if not target_user or not target_key:
-        raise PermissionError(
-            "Access Denied: Missing Odoo user credentials. "
+        raise ToolError(
+            "Access Denied: Missing Odoo client credentials. "
+            "The backend server does not store credentials; each client must supply their own. "
             "Please ensure your client .env contains ODOO_USER and ODOO_API_KEY."
         )
 
     if not target_db:
-        raise ValueError(
+        raise ToolError(
             "Target Odoo database not specified. "
             "Please configure ODOO_DB in your client .env file."
         )
@@ -79,14 +102,17 @@ class OdooClient:
             common = xmlrpc.client.ServerProxy(f"{target_url}/xmlrpc/2/common", allow_none=True)
             uid = common.authenticate(db, user, api_key, {})
             if not uid:
-                raise PermissionError(
-                    f"Authentication failed for user '{user}' against database '{db}' at {target_url}."
+                raise ToolError(
+                    f"Authentication failed for user '{user}' against database '{db}' at {target_url}. "
+                    "Please verify your ODOO_USER and ODOO_API_KEY in client .env."
                 )
             self._auth_cache[cache_key] = uid
             return uid
+        except ToolError:
+            raise
         except Exception as e:
             _logger.error("Error during Odoo XML-RPC authentication for %s: %s", user, e)
-            raise
+            raise ToolError(f"Odoo authentication error for user '{user}': {e}") from e
 
     def execute_kw(
         self,
@@ -136,10 +162,10 @@ class OdooClient:
             return result
         except xmlrpc.client.Fault as fault:
             _logger.error("Odoo XML-RPC Fault on %s.%s (user: %s): %s", model, method, target_user, fault.faultString)
-            raise RuntimeError(f"Odoo Fault ({fault.faultCode}): {fault.faultString}") from fault
+            raise ToolError(f"Odoo Fault ({fault.faultCode}): {fault.faultString}") from fault
         except Exception as e:
             _logger.error("Failed to execute %s.%s (user: %s): %s", model, method, target_user, e)
-            raise
+            raise ToolError(f"Failed to execute {model}.{method}: {e}") from e
 
 
 # Default singleton instance

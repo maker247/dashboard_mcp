@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Standalone Odoo Dashboard Read-Only MCP Server.
+Stateless backend: Client supplies authentication headers dynamically per-session.
 """
 
 import sys
 import argparse
 import logging
 from . import config
+from .odoo_client import current_client_headers
 
 # Setup logging
 logging.basicConfig(
@@ -44,6 +46,25 @@ except ImportError:
         """,
     )
 
+# Middleware: Capture client-forwarded authentication headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
+class ClientAuthHeaderMiddleware:
+    """
+    Captures client authentication headers from incoming HTTP transport requests
+    and stores them in task-local ContextVar for Odoo XML-RPC dispatching.
+    """
+    async def __call__(self, ctx, call_next):
+        headers = {}
+        if hasattr(ctx, "request") and ctx.request is not None and hasattr(ctx.request, "headers"):
+            headers = {k.lower(): str(v) for k, v in ctx.request.headers.items()}
+        token = current_client_headers.set(headers)
+        try:
+            return await call_next(ctx)
+        finally:
+            current_client_headers.reset(token)
+
+if hasattr(mcp, "middleware"):
+    mcp.middleware.append(ClientAuthHeaderMiddleware())
+
 # Register all read-only tools
 from .tools.bsc_reports import register_bsc_tools
 from .tools.financials import register_financial_tools
@@ -80,7 +101,7 @@ def main():
     args = parser.parse_args()
 
     _logger.info("Starting %s (Strict Read-Only: %s)...", config.MCP_SERVER_NAME, config.STRICT_READ_ONLY)
-    _logger.info("Target Odoo: %s (Database: %s)", config.ODOO_URL, config.ODOO_DB)
+    _logger.info("Authentication: Stateless / Client-provided headers (No server .env credentials).")
 
     if args.transport == "sse":
         _logger.info("Listening for SSE connections on http://%s:%d/sse", args.host, args.port)
