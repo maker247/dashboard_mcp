@@ -444,6 +444,7 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
             label = r_data.get("label", "")
             depth = r_data.get("depth", 1)
             is_pct = r_data.get("is_percentage", False)
+            is_blank = r_data.get("is_blank", False) or (label in ["Revenue", "COGS", "Operating Expenses"] and (r_data.get("actual") is None or r_data.get("actual") == 0.0))
             is_section_header = r_data.get("is_section_header", False) or (label in ["Revenue", "COGS", "Operating Expenses"])
             is_summary = any(k in label.lower() for k in ["total", "gross profit", "ebitda", "ebit", "ebt", "net income"])
             is_sub = (depth >= 2) and not is_section_header
@@ -459,10 +460,8 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
             c1 = row.cells[1]
             set_cell_properties(c1, width_dxa=col_widths[1], fill_hex=fill_color, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
             act_val = r_data.get("actual")
-            if is_section_header and (act_val is None or act_val == 0.0):
+            if is_blank:
                 act_str = ""
-            elif act_val is None or act_val == 0.0:
-                act_str = "—"
             else:
                 act_str = format_pct(act_val) if is_pct else format_currency(act_val)
             format_cell_text(c1, act_str, bold=(is_summary or is_section_header), font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
@@ -471,24 +470,19 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
                 c2 = row.cells[2]
                 set_cell_properties(c2, width_dxa=col_widths[2], fill_hex=fill_color, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
                 bud_val = r_data.get("budget")
-                if is_section_header and (act_val is None or act_val == 0.0):
+                if is_blank:
                     bud_str = ""
-                elif bud_val is None or bud_val == 0.0:
-                    bud_str = "—"
                 else:
                     bud_str = format_pct(bud_val) if is_pct else format_currency(bud_val)
                 format_cell_text(c2, bud_str, bold=(is_summary or is_section_header), font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
                 c3 = row.cells[3]
                 set_cell_properties(c3, width_dxa=col_widths[3], fill_hex=fill_color, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-                if is_section_header and (act_val is None or act_val == 0.0):
+                if is_blank:
                     var_str = ""
                     var_color = RGBColor(0, 0, 0)
-                elif bud_val == 0.0 or bud_val is None or (act_val == 0.0 and bud_val == 0.0):
-                    var_str = "—"
-                    var_color = RGBColor(0, 0, 0)
                 else:
-                    var_str = r_data.get("variance_pct_str", "—")
+                    var_str = r_data.get("variance_pct_str", "0.0%")
                     var_color = RGBColor(0, 0, 0)
                     if var_str.startswith("+"):
                         var_color = RGBColor(22, 101, 52)
@@ -572,7 +566,8 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
                 label = r_data.get("label") or r_data.get("metric", "")
                 depth = r_data.get("depth", 1)
                 val = r_data.get("actual")
-                val_str = "—" if (val is None or val == 0.0) else format_currency(val)
+                is_blank = r_data.get("is_blank", False)
+                val_str = "" if is_blank else format_currency(val)
                 is_section = (depth == 1) or label in ["ASSETS", "LIABILITIES", "EQUITY", "LIABILITIES + EQUITY"]
                 indent = "" if is_section else ("  " if depth == 2 else "    ")
                 fill_color = "EAECEE" if is_section else None
