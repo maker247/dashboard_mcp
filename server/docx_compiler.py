@@ -454,23 +454,35 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
 
             c1 = row.cells[1]
             set_cell_properties(c1, width_dxa=col_widths[1], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-            act_str = format_pct(r_data.get("actual")) if is_pct else format_currency(r_data.get("actual"))
+            act_val = r_data.get("actual")
+            if act_val is None or act_val == 0.0:
+                act_str = "—"
+            else:
+                act_str = format_pct(act_val) if is_pct else format_currency(act_val)
             format_cell_text(c1, act_str, bold=is_summary, font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
             if is_ytd:
                 c2 = row.cells[2]
                 set_cell_properties(c2, width_dxa=col_widths[2], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-                bud_str = format_pct(r_data.get("budget")) if is_pct else format_currency(r_data.get("budget"))
+                bud_val = r_data.get("budget")
+                if bud_val is None or bud_val == 0.0:
+                    bud_str = "—"
+                else:
+                    bud_str = format_pct(bud_val) if is_pct else format_currency(bud_val)
                 format_cell_text(c2, bud_str, bold=is_summary, font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
                 c3 = row.cells[3]
                 set_cell_properties(c3, width_dxa=col_widths[3], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-                var_str = r_data.get("variance_pct_str", "—")
-                var_color = RGBColor(0, 0, 0)
-                if var_str.startswith("+"):
-                    var_color = RGBColor(22, 101, 52)
-                elif var_str.startswith("-"):
-                    var_color = RGBColor(185, 28, 28)
+                if bud_val == 0.0 or bud_val is None or (act_val == 0.0 and bud_val == 0.0):
+                    var_str = "—"
+                    var_color = RGBColor(0, 0, 0)
+                else:
+                    var_str = r_data.get("variance_pct_str", "—")
+                    var_color = RGBColor(0, 0, 0)
+                    if var_str.startswith("+"):
+                        var_color = RGBColor(22, 101, 52)
+                    elif var_str.startswith("-"):
+                        var_color = RGBColor(185, 28, 28)
                 format_cell_text(c3, var_str, bold=is_summary, font_name="Calibri Light", font_size=10, color_rgb=var_color, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
         return tbl
@@ -507,81 +519,63 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
             p._p.addnext(tbl_ytd._tbl)
             break
 
-    # 10. Balance Sheet Table
+    # 10. Balance Sheet Table — multi-level structure matching dashboard
     bs_data = data.get("p1_financial", {}).get("balance_sheet", [])
-    bs_dict = {r.get("metric"): r.get("actual") for r in bs_data}
     col_widths = [6200, 4000]
 
-    # Find existing Balance Sheet table in template (2 cols, header starts with 'Metric')
-    tbl_bs = None
-    for t in doc.tables:
+    # Remove any existing legacy/static 2-column Balance Sheet table in template
+    for t in list(doc.tables):
         if len(t.rows) > 0 and len(t.columns) == 2:
-            if t.rows[0].cells[0].text.strip() == "Metric":
-                tbl_bs = t
-                break
+            hdr_txt = t.rows[0].cells[0].text.strip()
+            if hdr_txt in ["Metric", "Account"]:
+                t._tbl.getparent().remove(t._tbl)
 
-    if tbl_bs is not None:
-        # Style existing template header
-        set_cell_properties(tbl_bs.rows[0].cells[0], width_dxa=col_widths[0], fill_hex="44546A", top_mar=60, bottom_mar=60, left_mar=100, right_mar=100)
-        format_cell_text(tbl_bs.rows[0].cells[0], "Metric", bold=True, font_name="Calibri Light", font_size=11, color_rgb=RGBColor(255, 255, 255), align=WD_ALIGN_PARAGRAPH.LEFT)
-        set_cell_properties(tbl_bs.rows[0].cells[1], width_dxa=col_widths[1], fill_hex="44546A", top_mar=60, bottom_mar=60, left_mar=100, right_mar=100)
-        format_cell_text(tbl_bs.rows[0].cells[1], "Actual (THB)", bold=True, font_name="Calibri Light", font_size=11, color_rgb=RGBColor(255, 255, 255), align=WD_ALIGN_PARAGRAPH.RIGHT)
+    for p in doc.paragraphs:
+        if "Balance Sheet" in p.text and p.text.strip() == "Balance Sheet":
+            if p.runs:
+                p.runs[0].bold = True
+                p.runs[0].font.name = "Calibri Light"
+                p.runs[0].font.size = Pt(11)
 
-        # Populate rows
-        for r_idx in range(1, len(tbl_bs.rows)):
-            row = tbl_bs.rows[r_idx]
-            metric_name = row.cells[0].text.strip()
-            val = bs_dict.get(metric_name)
-            is_summary = any(k in metric_name.lower() for k in ["total", "working capital"])
+            tbl_new = doc.add_table(rows=1 + len(bs_data), cols=2)
+            tbl_new.alignment = WD_TABLE_ALIGNMENT.CENTER
+            tbl_new.autofit = False
 
-            set_cell_properties(row.cells[0], width_dxa=col_widths[0], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-            format_cell_text(row.cells[0], metric_name, bold=is_summary, font_name="Calibri Light", font_size=10)
+            tblPr = tbl_new._tbl.tblPr
+            tblW = tblPr.find(qn('w:tblW'))
+            if tblW is None:
+                tblW = OxmlElement('w:tblW')
+                tblPr.append(tblW)
+            tblW.set(qn('w:w'), '10200')
+            tblW.set(qn('w:type'), 'dxa')
 
-            set_cell_properties(row.cells[1], width_dxa=col_widths[1], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-            format_cell_text(row.cells[1], format_currency(val) if val is not None else "—", bold=is_summary, font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
-    else:
-        # Fallback if no template table found: create new table under 'Balance Sheet' paragraph
-        for p in doc.paragraphs:
-            if "Balance Sheet" in p.text and p.text.strip() == "Balance Sheet":
-                if p.runs:
-                    p.runs[0].bold = True
-                    p.runs[0].font.name = "Calibri Light"
-                    p.runs[0].font.size = Pt(11)
+            hdr = tbl_new.rows[0]
+            for c_idx, h_text in enumerate(["Account", "Actual (THB)"]):
+                cell = hdr.cells[c_idx]
+                set_cell_properties(cell, width_dxa=col_widths[c_idx], fill_hex="44546A", top_mar=60, bottom_mar=60, left_mar=100, right_mar=100)
+                align = WD_ALIGN_PARAGRAPH.LEFT if c_idx == 0 else WD_ALIGN_PARAGRAPH.RIGHT
+                format_cell_text(cell, h_text, bold=True, font_name="Calibri Light", font_size=11, color_rgb=RGBColor(255, 255, 255), align=align)
 
-                tbl_new = doc.add_table(rows=1 + len(bs_data), cols=2)
-                tbl_new.alignment = WD_TABLE_ALIGNMENT.CENTER
-                tbl_new.autofit = False
+            for r_idx, r_data in enumerate(bs_data):
+                row = tbl_new.rows[r_idx + 1]
+                label = r_data.get("label") or r_data.get("metric", "")
+                depth = r_data.get("depth", 1)
+                val = r_data.get("actual")
+                val_str = "—" if (val is None or val == 0.0) else format_currency(val)
+                is_section = (depth == 1) or label in ["ASSETS", "LIABILITIES", "EQUITY", "LIABILITIES + EQUITY"]
+                indent = "" if is_section else ("  " if depth == 2 else "    ")
+                fill_color = "EAECEE" if is_section else None
 
-                tblPr = tbl_new._tbl.tblPr
-                tblW = tblPr.find(qn('w:tblW'))
-                if tblW is None:
-                    tblW = OxmlElement('w:tblW')
-                    tblPr.append(tblW)
-                tblW.set(qn('w:w'), '10200')
-                tblW.set(qn('w:type'), 'dxa')
+                c0 = row.cells[0]
+                set_cell_properties(c0, width_dxa=col_widths[0], fill_hex=fill_color, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
+                format_cell_text(c0, indent + label, bold=(is_section or depth == 2), font_name="Calibri Light", font_size=10 if is_section else 9.5)
 
-                hdr = tbl_new.rows[0]
-                for c_idx, h_text in enumerate(["Metric", "Actual (THB)"]):
-                    cell = hdr.cells[c_idx]
-                    set_cell_properties(cell, width_dxa=col_widths[c_idx], fill_hex="44546A", top_mar=60, bottom_mar=60, left_mar=100, right_mar=100)
-                    align = WD_ALIGN_PARAGRAPH.LEFT if c_idx == 0 else WD_ALIGN_PARAGRAPH.RIGHT
-                    format_cell_text(cell, h_text, bold=True, font_name="Calibri Light", font_size=11, color_rgb=RGBColor(255, 255, 255), align=align)
+                c1 = row.cells[1]
+                set_cell_properties(c1, width_dxa=col_widths[1], fill_hex=fill_color, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
+                format_cell_text(c1, val_str, bold=(is_section or depth == 2), font_name="Calibri Light", font_size=10 if is_section else 9.5, align=WD_ALIGN_PARAGRAPH.RIGHT)
 
-                for r_idx, r_data in enumerate(bs_data):
-                    row = tbl_new.rows[r_idx + 1]
-                    metric_name = r_data.get("metric", "")
-                    is_summary = any(k in metric_name.lower() for k in ["total", "working capital"])
-
-                    c0 = row.cells[0]
-                    set_cell_properties(c0, width_dxa=col_widths[0], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-                    format_cell_text(c0, metric_name, bold=is_summary, font_name="Calibri Light", font_size=10)
-
-                    c1 = row.cells[1]
-                    set_cell_properties(c1, width_dxa=col_widths[1], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-                    format_cell_text(c1, format_currency(r_data.get("actual")), bold=is_summary, font_name="Calibri Light", font_size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
-
-                p._p.addnext(tbl_new._tbl)
-                break
+            p._p.addnext(tbl_new._tbl)
+            break
 
     # 11. Dynamic Charts — inject generated PNG images into the document
     p2_data = data.get('p2_pipeline', {})
