@@ -17,6 +17,8 @@ _logger = logging.getLogger(__name__)
 
 
 def _fetch_direct_bsc_data(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     week_number: Optional[int] = None,
     year: Optional[int] = None,
     company_ids: Optional[List[int]] = None,
@@ -30,7 +32,12 @@ def _fetch_direct_bsc_data(
     today = datetime.date.today()
     yr = int(year or today.year)
 
-    if week_number:
+    if start_date and end_date:
+        start_d = datetime.date.fromisoformat(start_date)
+        end_d = datetime.date.fromisoformat(end_date)
+        w_num = start_d.isocalendar()[1]
+        yr = start_d.year
+    elif week_number:
         start_d = datetime.date.fromisocalendar(yr, int(week_number), 1)
         end_d = datetime.date.fromisocalendar(yr, int(week_number), 5)
         w_num = int(week_number)
@@ -238,6 +245,8 @@ def register_bsc_tools(mcp):
 
     @mcp.tool()
     def get_weekly_bsc_data(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         week_number: Optional[int] = None,
         year: Optional[int] = None,
         company_ids: Optional[List[int]] = None,
@@ -247,10 +256,21 @@ def register_bsc_tools(mcp):
         - P1 Financial: Weekly P&L (13 lines), YTD P&L vs Budget + Variance, Balance Sheet
         - P2 Pipeline: Active leads by phase, new leads this week, salesperson open pipeline
         - P3 Helpdesk: Solved turnaround hours, new/open tickets, and aging tickets (>48h)
+
+        Args:
+            start_date: Optional start date in 'YYYY-MM-DD' format (e.g. '2026-09-14').
+            end_date: Optional end date in 'YYYY-MM-DD' format (e.g. '2026-09-18').
+            week_number: Optional ISO week number (e.g. 38). If start_date/end_date are provided, week_number is auto-derived.
+            year: Optional calendar year (e.g. 2026).
+            company_ids: Optional list of company IDs (defaults to [1, 2]).
         
         Strictly READ-ONLY. Does not modify any database records.
         """
         kwargs = {}
+        if start_date:
+            kwargs['start_date'] = start_date
+        if end_date:
+            kwargs['end_date'] = end_date
         if week_number is not None:
             kwargs['week_number'] = week_number
         if year is not None:
@@ -272,10 +292,18 @@ def register_bsc_tools(mcp):
             _logger.info("infs_dashboard.data_service unavailable (%s), using direct ORM aggregation fallback.", e)
 
         # Resilient fallback directly querying crm.lead, helpdesk.ticket, and account.move.line
-        return _fetch_direct_bsc_data(week_number=week_number, year=year, company_ids=company_ids)
+        return _fetch_direct_bsc_data(
+            start_date=start_date,
+            end_date=end_date,
+            week_number=week_number,
+            year=year,
+            company_ids=company_ids,
+        )
 
     @mcp.tool()
     def build_weekly_bsc_docx(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         week_number: Optional[int] = None,
         year: Optional[int] = None,
         executive_summary: str = "",
@@ -284,12 +312,26 @@ def register_bsc_tools(mcp):
         """
         Compiles the finished executive Weekly BSC Management Report (.docx) in memory.
         Injects the executive summary narrative and all tables into the Word template.
+
+        Args:
+            start_date: Optional start date in 'YYYY-MM-DD' format (e.g. '2026-09-14').
+            end_date: Optional end date in 'YYYY-MM-DD' format (e.g. '2026-09-18').
+            week_number: Optional ISO week number (e.g. 38).
+            year: Optional calendar year (e.g. 2026).
+            executive_summary: Analysis and strategic commentary to inject into the executive summary section.
+            company_ids: Optional list of company IDs (defaults to [1, 2]).
         
         Strictly READ-ONLY against Odoo: Zero database records (such as attachments) are created.
         Returns the base64-encoded docx file, filename, and summary stats.
         """
         # 1. Fetch live report data (read-only)
-        data = get_weekly_bsc_data(week_number=week_number, year=year, company_ids=company_ids)
+        data = get_weekly_bsc_data(
+            start_date=start_date,
+            end_date=end_date,
+            week_number=week_number,
+            year=year,
+            company_ids=company_ids,
+        )
 
         # 2. Fetch official template if available
         template_bytes = None

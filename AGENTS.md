@@ -63,8 +63,10 @@ dashboard_mcp/
 | `get_weekly_bsc_data` | **Primary tool.** Fetches all 3 BSC pillars: P1 Financial (P&L, Balance Sheet), P2 Pipeline (CRM leads by phase, new leads, salesperson ranking), P3 Helpdesk (ticket metrics, aging). Tries `infs.weekly.bsc.report` first; falls back to direct ORM queries. |
 | `build_weekly_bsc_docx` | Compiles the full Weekly Management Report `.docx` in-memory. Includes dynamically generated matplotlib charts. Returns base64-encoded file. **Does NOT save to Odoo.** |
 
-**Parameters for `get_weekly_bsc_data`:**
-- `week_number` (int, optional) ? ISO week number. Defaults to current week.
+**Parameters for `get_weekly_bsc_data` and `build_weekly_bsc_docx`:**
+- `start_date` (str, optional) ? Start date in 'YYYY-MM-DD' (e.g. '2026-09-14').
+- `end_date` (str, optional) ? End date in 'YYYY-MM-DD' (e.g. '2026-09-18').
+- `week_number` (int, optional) ? ISO week number (e.g. 38). If dates are omitted, derived from this.
 - `year` (int, optional) ? Defaults to current year.
 - `company_ids` (list[int], optional) ? Defaults to both companies [1, 2].
 
