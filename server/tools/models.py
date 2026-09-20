@@ -132,7 +132,19 @@ def register_model_tools(mcp):
         if order:
             kwargs['orderby'] = order
 
-        return default_client.execute_kw(model, 'read_group', [final_domain], kwargs)
+        agg_fields = fields or (groupby or ['__count'])
+        try:
+            return default_client.execute_kw(model, 'read_group', [final_domain, agg_fields], kwargs)
+        except Exception as e:
+            err_str = str(e)
+            if "Cannot convert field" in err_str and "to SQL" in err_str:
+                raise ValueError(
+                    f"Aggregation failed: {err_str}. "
+                    "Note: Odoo read_group executes direct SQL and only supports stored database fields (store=True). "
+                    "Computed fields like 'commercial_partner_id' or 'open_hours' are in-memory (store=False). "
+                    "Fix: Group by 'partner_id' instead of 'commercial_partner_id', or use specialized tools like 'get_helpdesk_metrics' or 'get_aging_tickets'."
+                ) from e
+            raise
 
     @mcp.tool()
     def get_model_fields(

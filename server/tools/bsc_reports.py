@@ -307,6 +307,8 @@ def register_bsc_tools(mcp):
         week_number: Optional[int] = None,
         year: Optional[int] = None,
         executive_summary: str = "",
+        template_version: Optional[str] = None,
+        template_base64: Optional[str] = None,
         company_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
@@ -319,6 +321,8 @@ def register_bsc_tools(mcp):
             week_number: Optional ISO week number (e.g. 38).
             year: Optional calendar year (e.g. 2026).
             executive_summary: Analysis and strategic commentary to inject into the executive summary section.
+            template_version: Optional version tag of template used (e.g. 'v0.1', 'v0.2').
+            template_base64: Optional base64-encoded Word template (.docx) provided directly by client MCP.
             company_ids: Optional list of company IDs (defaults to [1, 2]).
         
         Strictly READ-ONLY against Odoo: Zero database records (such as attachments) are created.
@@ -333,19 +337,32 @@ def register_bsc_tools(mcp):
             company_ids=company_ids,
         )
 
-        # 2. Fetch official template if available
+        # 2. Resolve template: Client-supplied base64 first, then Odoo RPC fallback
         template_bytes = None
-        try:
-            template_b64 = default_client.execute_kw(
-                model='infs_dashboard.data_service',
-                method='get_weekly_bsc_template',
-                args=[],
-                kwargs={},
-            )
-            if template_b64:
-                template_bytes = base64.b64decode(template_b64)
-        except Exception as e:
-            _logger.info("Custom docx template not found in Odoo (%s); generating clean executive docx in memory.", e)
+        used_version = template_version
+
+        if template_base64:
+            try:
+                template_bytes = base64.b64decode(template_base64)
+                if not used_version:
+                    used_version = "client_custom"
+            except Exception as e:
+                _logger.warning("Failed to decode client template_base64: %s", e)
+
+        if not template_bytes:
+            try:
+                template_b64 = default_client.execute_kw(
+                    model='infs_dashboard.data_service',
+                    method='get_weekly_bsc_template',
+                    args=[],
+                    kwargs={},
+                )
+                if template_b64:
+                    template_bytes = base64.b64decode(template_b64)
+                    used_version = used_version or "odoo_default"
+            except Exception as e:
+                _logger.info("Custom docx template not found in Odoo (%s); generating clean executive docx in memory.", e)
+                used_version = "in_memory_default"
 
         # 3. Build document 100% in-memory
         narrative = {'executive_summary': executive_summary} if executive_summary else {}
@@ -362,6 +379,7 @@ def register_bsc_tools(mcp):
             'size_bytes': len(docx_bytes),
             'week_number': w_num,
             'year': yr,
+            'template_version_used': used_version,
             'status': 'success',
             'read_only_verified': True,
         }

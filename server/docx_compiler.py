@@ -36,8 +36,12 @@ def _build_leads_by_phase_chart(leads_by_stage: list, week_info: dict) -> Option
     if not leads_by_stage:
         return None
 
-    phases = [r.get('phase', '') for r in leads_by_stage]
-    counts = [r.get('count', 0) for r in leads_by_stage]
+    valid_rows = [r for r in leads_by_stage if r.get('phase') != 'Total']
+    if not valid_rows:
+        return None
+
+    phases = [r.get('phase', '') for r in valid_rows]
+    counts = [r.get('leads_count', r.get('count', 0)) for r in valid_rows]
 
     # Blue gradient palette (light → dark) matching the template style
     base_colors = [
@@ -438,12 +442,15 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
         for r_idx, r_data in enumerate(rows_data):
             row = tbl.rows[r_idx + 1]
             label = r_data.get("label", "")
+            depth = r_data.get("depth", 1)
             is_pct = r_data.get("is_percentage", False)
             is_summary = any(k in label.lower() for k in ["total", "gross profit", "ebitda", "ebit", "ebt", "net income"])
+            is_sub = (depth >= 2)
+            display_label = ("    " + label) if is_sub else label
 
             c0 = row.cells[0]
             set_cell_properties(c0, width_dxa=col_widths[0], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
-            format_cell_text(c0, label, bold=is_summary, font_name="Calibri Light", font_size=10)
+            format_cell_text(c0, display_label, bold=(depth == 1 or is_summary), font_name="Calibri Light", font_size=10 if not is_sub else 9.5)
 
             c1 = row.cells[1]
             set_cell_properties(c1, width_dxa=col_widths[1], fill_hex=None, top_mar=50, bottom_mar=50, left_mar=100, right_mar=100)
@@ -581,50 +588,104 @@ def build_bsc_document_bytes(data: dict, narrative: Optional[dict] = None, templ
     week_info_chart = data.get('week_info', {})
 
     # 11a. Leads by Phase chart
-    leads_by_stage = p2_data.get('leads_by_stage', [])
+    leads_by_stage = p2_data.get('leads_by_phase') or p2_data.get('leads_by_stage', [])
     chart_png = _build_leads_by_phase_chart(leads_by_stage, week_info_chart)
     if chart_png:
-        # Try to replace the first inline image (shape) that acts as chart placeholder;
-        # if none found, add the chart as a new paragraph before the salesperson table.
         chart_inserted = False
-        # Look for a paragraph that contains a drawing/image placeholder for the pipeline chart
+        # 1. Search for tag placeholder {{CHART_LEADS_BY_PHASE}} or name matches
         for p in doc.paragraphs:
-            if 'leads_by_phase' in p.text.lower() or 'pipeline chart' in p.text.lower():
-                p.clear()
+            t = p.text.strip().lower()
+            if '{{chart_leads_by_phase}}' in t or 'leads_by_phase' in t or 'pipeline chart' in t:
+                p.text = ""
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run()
-                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.2))
                 chart_inserted = True
                 break
 
+        # 2. Backward compatibility with v0.1: replace static image1.png blob directly
         if not chart_inserted:
-            # Append chart after the last leads table (Table index 5) if it exists
+            for rel_id, part in doc.part.related_parts.items():
+                if "image1.png" in getattr(part, "partname", ""):
+                    part._blob = chart_png
+                    chart_inserted = True
+                    break
+
+        # 3. Fallback: append after leads by phase table (Table index 5)
+        if not chart_inserted:
             if len(doc.tables) > 5:
                 tbl_anchor = doc.tables[5]
-                # Insert a new paragraph after the table
                 new_para = OxmlElement('w:p')
                 tbl_anchor._tbl.addnext(new_para)
                 from docx.text.paragraph import Paragraph as DocxParagraph
                 p_obj = DocxParagraph(new_para, doc)
                 p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p_obj.add_run()
-                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.2))
             else:
-                # Last resort — just append to document
                 p_obj = doc.add_paragraph()
                 p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p_obj.add_run()
-                run.add_picture(io.BytesIO(chart_png), width=Inches(6.5))
+                run.add_picture(io.BytesIO(chart_png), width=Inches(6.2))
 
     # 11b. Pipeline by salesperson chart
     sp_pipeline = p2_data.get('open_pipeline_by_salesperson', [])
     sp_chart_png = _build_pipeline_by_sp_chart(sp_pipeline, week_info_chart)
     if sp_chart_png:
+        sp_inserted = False
         for p in doc.paragraphs:
-            if 'pipeline_by_sp' in p.text.lower() or 'salesperson chart' in p.text.lower():
-                p.clear()
+            t = p.text.strip().lower()
+            if '{{chart_pipeline_by_sp}}' in t or 'pipeline_by_sp' in t or 'salesperson chart' in t:
+                p.text = ""
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run()
-                run.add_picture(io.BytesIO(sp_chart_png), width=Inches(6.5))
+                run.add_picture(io.BytesIO(sp_chart_png), width=Inches(6.2))
+                sp_inserted = True
                 break
+
+        if not sp_inserted and len(doc.tables) > 7:
+            tbl_sp = doc.tables[7]
+            new_para = OxmlElement('w:p')
+            tbl_sp._tbl.addnext(new_para)
+            from docx.text.paragraph import Paragraph as DocxParagraph
+            p_obj = DocxParagraph(new_para, doc)
+            p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p_obj.add_run()
+            run.add_picture(io.BytesIO(sp_chart_png), width=Inches(6.2))
+
+    # 12. Layout and Spacing Polish
+    # 12a. Ensure cantSplit on all table rows and tblHeader on row 0
+    for table in doc.tables:
+        for row_idx, row in enumerate(table.rows):
+            trPr = row._tr.get_or_add_trPr()
+            if trPr.find(qn("w:cantSplit")) is None:
+                trPr.append(OxmlElement("w:cantSplit"))
+            if row_idx == 0 and trPr.find(qn("w:tblHeader")) is None:
+                trPr.append(OxmlElement("w:tblHeader"))
+
+    # 12b. Keep section headings with next element to prevent orphan headings
+    section_keywords = ("executive summary", "p5 ·", "p4 ·", "p3 ·", "p2 ·", "income statement", "profit & loss", "balance sheet")
+    for p in doc.paragraphs:
+        txt = p.text.strip().lower()
+        if any(txt.startswith(kw) for kw in section_keywords):
+            p.paragraph_format.keep_with_next = True
+
+    # 12c. Clean consecutive empty paragraphs
+    body_elem = doc._body._body
+    prev_was_empty_p = False
+    for child in list(body_elem):
+        if child.tag.endswith("}p"):
+            text = "".join(child.itertext()).strip()
+            has_drawing = "drawing" in child.xml
+            if not text and not has_drawing:
+                if prev_was_empty_p:
+                    body_elem.remove(child)
+                else:
+                    prev_was_empty_p = True
+            else:
+                prev_was_empty_p = False
+        else:
+            prev_was_empty_p = False
 
     out_io = io.BytesIO()
     doc.save(out_io)
