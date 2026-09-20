@@ -16,123 +16,166 @@ A high-performance, strictly **Read-Only** Model Context Protocol (MCP) server t
  │  odoo_mcp_client.py    │ (Lightweight, portable proxy via dashboard_mcp_client)
  └───────────┬────────────┘
              │ Office LAN HTTP / SSE (Port 8095)
+             │ Forwarding per-user credentials in HTTP request headers:
+             │ [X-Odoo-User, X-Odoo-Api-Key, X-Odoo-Db, X-Odoo-Url]
 ═════════════╪═════════════════════════════════════════════════════════
- [Odoo Server Host (Ubuntu / Linux)]
+ [Company Server Host (Office Network / Subnet)]
  ┌───────────▼────────────┐
  │   MCP Server (app.py)  │ (:8095/sse)
  └───────────┬────────────┘
+             │ Stateless: No master .env or stored credentials on server
              │ Read-Only Security Guard (security.py)
  ┌───────────▼────────────┐
  │    Odoo XML-RPC API    │ (:8069)
  └────────────────────────┘
 ```
 
-1. **Standalone Deployment**: Runs as an independent Python service on the Odoo server host. It is **NOT** an Odoo addon and has zero dependency on Odoo's module lifecycle or upgrade process.
-2. **Strict Read-Only**: Mutations (`create`, `write`, `unlink`, `copy`, `action_*`) are blocked at the MCP layer before hitting Odoo.
-3. **100% In-Memory DOCX Generation**: Word reports (`.docx`) are compiled completely in memory using `python-docx` and returned as binary base64 data. No records or attachments (`ir.attachment`) are ever created in Odoo.
-4. **Office Network Restricted**: Deployed on dedicated port `8095`, accessible only within the internal office subnet.
-5. **Dedicated Client Repository**: Coworkers clone the lightweight [`dashboard_mcp_client`](https://github.com/maker247/dashboard_mcp_client) repository to connect Claude Desktop from their individual PCs without needing backend dependencies.
+1. **Stateless & Zero Server Credentials**: The backend server stores **NO `.env` credentials**. Every request is dynamically authenticated against Odoo using the calling client's credentials forwarded via request headers (`X-Odoo-User`, `X-Odoo-Api-Key`). Unauthenticated requests are immediately denied.
+2. **Office Network Restricted**: Deployed on port `8095`, accessible only within the internal company office LAN.
+3. **Strict Read-Only Enforcement**: Mutations (`create`, `write`, `unlink`, `copy`, `action_*`) are blocked at the MCP layer before hitting Odoo.
+4. **100% In-Memory DOCX Generation**: Word reports (`.docx`) are compiled completely in memory using `python-docx` and returned as binary base64 data. No records or attachments (`ir.attachment`) are created in Odoo.
+5. **Dedicated Client Repository**: Coworkers clone the lightweight [`dashboard_mcp_client`](https://github.com/maker247/dashboard_mcp_client) repository on their laptops/workstations to connect Claude Desktop.
 
 ---
 
-## 🔒 Security Policy
+## 🚀 Production Deployment Guide (Company Server)
 
-- **Method Whitelist**: Only approved read-only ORM methods (`search`, `read`, `search_read`, `get_weekly_bsc_report_data`, `get_pnl_official_report_lines`, etc.) can be called.
-- **Strict Blacklist & Prefix Checks**: Any call containing `create`, `write`, `unlink`, `action_*`, or `button_*` is immediately rejected with a `PermissionError`.
-- **Token / API Key Authentication**: Uses standard Odoo user credentials/API keys over XML-RPC, respecting user-level record rules and security groups defined in Odoo.
+This server is designed to run as a continuous background daemon on your company server within the office network.
 
----
+### 1. Prerequisites
+- **Operating System:** Linux (Ubuntu 20.04/22.04/24.04 LTS, Debian, or RHEL/CentOS)
+- **Python:** Python 3.10+
+- **Network:** Only accessible inside the office network (behind office router/firewall)
 
-## 🛠️ Server Setup (Odoo Host)
+### 2. Installation on Server
+Clone the repository to your server deployment directory (e.g. `/opt/dashboard_mcp`):
 
-### 1. Requirements & Dependencies
-Ensure Python 3.10+ is available. From the `odoo_dashboard_mcp` directory:
 ```bash
-# Using existing Odoo virtualenv or a new virtualenv
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Clone repository
+sudo git clone https://github.com/maker247/dashboard_mcp.git /opt/dashboard_mcp
+cd /opt/dashboard_mcp
+
+# Create Python virtual environment & install dependencies
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install --upgrade pip
+sudo .venv/bin/pip install -r requirements.txt
+
+# Set directory ownership (e.g. to odoo user or your deploy user)
+sudo chown -R odoo:odoo /opt/dashboard_mcp
 ```
 
-### 2. Configuration (`.env`)
-Copy `.env.example` to `.env` and fill in your settings:
+### 3. Server Configuration (No Credentials Needed)
+The server runs out of the box with safe defaults:
+- **Host:** `0.0.0.0` (Listens on all server interfaces for office LAN access)
+- **Port:** `8095`
+- **Security:** Strict Read-Only enabled
+
+> ⚠️ **NO `.env` File Required for Credentials:**
+> The server does **not** store any user credentials. Do **not** place employee passwords or API keys on the server.
+> If you need to override the daemon port, you can optionally create `.env` containing only:
+> ```ini
+> MCP_SERVER_HOST=0.0.0.0
+> MCP_SERVER_PORT=8095
+> ```
+
+### 4. Deploy with Systemd (Recommended)
+A pre-configured service unit file is provided in [`deploy/odoo-dashboard-mcp.service`](deploy/odoo-dashboard-mcp.service).
+
 ```bash
-cp .env.example .env
-```
-Edit `.env`:
-```ini
-# Odoo Instance Connection
-ODOO_URL=http://localhost:8069
-ODOO_DB=db_sep_01
-ODOO_USER=your_user@example.com
-ODOO_API_KEY=your_odoo_password_or_api_key
+# 1. Copy the systemd service file
+sudo cp deploy/odoo-dashboard-mcp.service /etc/systemd/system/
 
-# Standalone MCP Server Settings
-MCP_SERVER_HOST=0.0.0.0
-MCP_SERVER_PORT=8095
-MCP_SERVER_NAME=odoo-dashboard-mcp
-
-# Security: Read-Only is strictly enforced (1 = enabled)
-STRICT_READ_ONLY=1
-```
-
-### 3. Start the Server
-
-#### Interactive Run:
-```bash
-./run_server.sh
-```
-
-#### Background Service (systemd - Recommended for Production):
-Create `/etc/systemd/system/odoo-mcp.service`:
-```ini
-[Unit]
-Description=Odoo Dashboard Read-Only MCP Server
-After=network.target
-
-[Service]
-Type=simple
-User=odoo
-WorkingDirectory=/path/to/odoo_dashboard_mcp
-ExecStart=/path/to/venv/bin/python -m server.app --host 0.0.0.0 --port 8095
-Restart=always
-RestartSec=5
-EnvironmentFile=/path/to/odoo_dashboard_mcp/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-Enable and start the service:
-```bash
+# 2. Reload systemd daemon
 sudo systemctl daemon-reload
-sudo systemctl enable --now odoo-mcp
+
+# 3. Enable service to start automatically on system boot
+sudo systemctl enable odoo-dashboard-mcp
+
+# 4. Start the service
+sudo systemctl start odoo-dashboard-mcp
+
+# 5. Verify service status
+sudo systemctl status odoo-dashboard-mcp
 ```
+
+### 5. Managing the Service
+- **Check live logs:**
+  ```bash
+  sudo journalctl -u odoo-dashboard-mcp -f
+  ```
+- **Restart service:**
+  ```bash
+  sudo systemctl restart odoo-dashboard-mcp
+  ```
+- **Stop service:**
+  ```bash
+  sudo systemctl stop odoo-dashboard-mcp
+  ```
+
+### 6. Office Firewall Configuration
+Ensure port `8095` is permitted within the local office network:
+```bash
+# Using UFW (Ubuntu/Debian) - allow from office subnet only (e.g. 192.168.1.0/24)
+sudo ufw allow from 192.168.1.0/24 to any port 8095 proto tcp comment "Odoo Dashboard MCP (Office LAN)"
+
+# Or allow port 8095 on local network interface
+sudo ufw allow 8095/tcp
+```
+
+---
+
+## 🔒 Security Architecture
+
+| Layer | Protection Mechanism |
+| :--- | :--- |
+| **Network Boundary** | Restricted to the office LAN / VPN. Never exposed to the public Internet. |
+| **Stateless Auth** | Zero master `.env` or shared administrative accounts on the server. Unauthenticated requests are rejected immediately. |
+| **User Identification** | Dynamic per-request headers (`X-Odoo-User`, `X-Odoo-Api-Key`). XML-RPC actions execute strictly under the caller's individual Odoo UID and record rules. |
+| **ORM Method Guard** | Whitelist-only for read operations (`search_read`, `read_group`, report builders). Mutations (`create`, `write`, `unlink`, `action_*`) are blocked at runtime. |
+| **In-Memory Documents** | Report `.docx` files are generated in RAM. Zero temporary files or attachments written to disk or Odoo. |
 
 ---
 
 ## 💻 Client Setup (For Coworkers' PCs)
 
-Coworkers do **not** need to clone this backend server repository or install Odoo/PostgreSQL dependencies.
+Coworkers do **not** need access to the company server or this backend repository.
 
-Client setup is fully packaged in the dedicated repository:
+They only need to install the lightweight client repository on their personal PC or Mac:
 👉 **[github.com/maker247/dashboard_mcp_client](https://github.com/maker247/dashboard_mcp_client)**
 
-### Quick Client Setup Summary:
-1. **Clone the client repo:**
+### Quick Client Setup:
+1. **Clone client repo:**
    ```bash
-   git clone git@github.com:maker247/dashboard_mcp_client.git
+   git clone https://github.com/maker247/dashboard_mcp_client.git
    cd dashboard_mcp_client
    ```
-2. **Install minimal dependencies:**
+2. **Setup virtualenv:**
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    ```
-3. **Configure Claude Desktop** using the sample in `sample_claude_config.json` pointing to `http://YOUR_ODOO_SERVER_IP:8095/sse`.
-4. **Restart Claude Desktop**. The hammer icon (🔨) will display all Odoo tools.
+3. **Configure personal `.env`:**
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` with company server IP and your personal Odoo credentials:
+   ```ini
+   # Company Server IP on the office LAN
+   ODOO_MCP_SERVER_URL=http://<COMPANY_SERVER_IP>:8095/sse
+   ODOO_URL=http://<COMPANY_SERVER_IP>:8069
+   ODOO_DB=db_sep_01
 
-See the [Client Repository README](https://github.com/maker247/dashboard_mcp_client#readme) for OS-specific instructions (macOS, Windows, Linux) and troubleshooting.
+   # Your personal Odoo credentials (generate API key in Odoo user preferences)
+   ODOO_USER=your_email@infinityitsuccess.com
+   ODOO_API_KEY=your_odoo_api_key
+   ```
+4. **Test Connection:**
+   ```bash
+   python test_connection.py
+   ```
+5. **Configure Claude Desktop** using the sample in `sample_claude_config.json`.
+6. Restart Claude Desktop.
 
 ---
 
@@ -141,7 +184,8 @@ See the [Client Repository README](https://github.com/maker247/dashboard_mcp_cli
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
 | `get_weekly_bsc_data` | `week_number`, `year`, `company_ids` | Fetches consolidated BSC metrics (P1 Financials, P2 Pipeline, P3 Helpdesk) |
-| `build_weekly_bsc_docx` | `week_number`, `year`, `executive_summary`, `company_ids` | Builds complete executive Word `.docx` report in memory and returns base64 |
+| `list_report_templates` | *(none)* | Discovers locally available Word `.docx` templates and identifies latest version |
+| `build_weekly_bsc_docx` | `week_number`, `year`, `template_version`, `executive_summary`, `company_ids` | Builds executive Word `.docx` report in memory and returns base64 |
 | `get_pnl_actual_vs_budget` | `start_date`, `end_date`, `company_ids` | Official P&L lines comparing Actual vs Budget and Variance |
 | `get_balance_sheet_summary` | `start_date`, `end_date`, `company_ids` | Balance Sheet summary (Cash, AR, Current Assets, Liabilities, Equity) |
 | `get_gross_margin_by_service_lane` | `start_date`, `end_date`, `company_id` | Gross Margin breakdown across service lines (Digital, Cloud, Consulting) |
@@ -149,3 +193,5 @@ See the [Client Repository README](https://github.com/maker247/dashboard_mcp_cli
 | `get_top_open_deals` | `limit`, `company_ids` | Top open CRM deals sorted by value with sales rep and stage |
 | `get_helpdesk_metrics` | `start_date`, `end_date` | Solved vs new tickets, current backlog, and average resolution turnaround hours |
 | `get_aging_tickets` | `open_hours_threshold` | Tickets open beyond threshold (default 48h) for SLA risk detection |
+| `search_read_records` | `model`, `domain`, `fields`, `limit` | Generic read-only search and read on authorized Odoo models |
+| `aggregate_records` | `model`, `domain`, `fields`, `groupby` | Generic read-only aggregate (read_group) for sums/counts |
