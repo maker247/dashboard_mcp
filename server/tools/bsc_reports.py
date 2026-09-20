@@ -10,6 +10,7 @@ import base64
 import datetime
 import logging
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 from ..odoo_client import default_client
 from ..docx_compiler import build_bsc_document_bytes
 
@@ -301,6 +302,51 @@ def register_bsc_tools(mcp):
         )
 
     @mcp.tool()
+    def list_report_templates() -> Dict[str, Any]:
+        """
+        Lists all available Word (.docx) report templates (e.g. 'v0.1', 'v0.2') and indicates which version is latest.
+        Claude can use this standalone tool to discover template versions and their features before generating a report.
+        """
+        templates_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+        templates = []
+        if templates_dir.exists():
+            for d in sorted(templates_dir.iterdir()):
+                if d.is_dir():
+                    docx_files = list(d.glob("*.docx"))
+                    if docx_files:
+                        target_f = docx_files[0]
+                        for f in docx_files:
+                            if "template" in f.name.lower():
+                                target_f = f
+                                break
+                        ver = d.name
+                        desc = "Baseline executive template (legacy)" if ver == "v0.1" else "Enhanced template with dynamic Matplotlib charts and page-break protection"
+                        templates.append({
+                            "version": ver,
+                            "filename": target_f.name,
+                            "size_kb": round(target_f.stat().st_size / 1024, 1),
+                            "description": desc,
+                        })
+
+        if not templates:
+            templates = [
+                {"version": "v0.1", "filename": "weekly_bsc_template.docx", "description": "Baseline executive template"},
+                {"version": "v0.2", "filename": "weekly_bsc_template.docx", "description": "Enhanced template with dynamic charts", "is_latest": True}
+            ]
+        else:
+            for v in templates[:-1]:
+                v["is_latest"] = False
+            templates[-1]["is_latest"] = True
+
+        return {
+            "status": "success",
+            "count": len(templates),
+            "latest_version": templates[-1]["version"] if templates else "v0.2",
+            "templates": templates,
+            "instruction": "Pass template_version='v0.2' (or another version) to build_weekly_bsc_docx.",
+        }
+
+    @mcp.tool()
     def build_weekly_bsc_docx(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -350,6 +396,20 @@ def register_bsc_tools(mcp):
                 _logger.warning("Failed to decode client template_base64: %s", e)
 
         if not template_bytes:
+            # 2a. Check local server templates directory (e.g. templates/v0.2/)
+            server_templates_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+            ver_to_check = template_version or "v0.2"
+            ver_file = server_templates_dir / ver_to_check / "weekly_bsc_template.docx"
+            if ver_file.exists():
+                try:
+                    template_bytes = ver_file.read_bytes()
+                    used_version = ver_to_check
+                    _logger.info("Loaded server template [%s] from %s", ver_to_check, ver_file)
+                except Exception as e:
+                    _logger.warning("Failed to read server template %s: %s", ver_file, e)
+
+        if not template_bytes:
+            # 2b. Fallback to Odoo XML-RPC
             try:
                 template_b64 = default_client.execute_kw(
                     model='infs_dashboard.data_service',
