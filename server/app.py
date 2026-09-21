@@ -46,24 +46,31 @@ except ImportError:
         """,
     )
 
-# Middleware: Capture client-forwarded authentication headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
+# ASGI Middleware: Capture client-forwarded authentication headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
 class ClientAuthHeaderMiddleware:
     """
-    Captures client authentication headers from incoming HTTP transport requests
-    and stores them in task-local ContextVar for Odoo XML-RPC dispatching.
+    Captures client authentication headers from incoming HTTP transport requests (GET /sse and POST /messages/)
+    and stores them in task-local ContextVar and fallback cache for Odoo XML-RPC dispatching.
     """
-    async def __call__(self, ctx, call_next):
-        headers = {}
-        if hasattr(ctx, "request") and ctx.request is not None and hasattr(ctx.request, "headers"):
-            headers = {k.lower(): str(v) for k, v in ctx.request.headers.items()}
-        token = current_client_headers.set(headers)
-        try:
-            return await call_next(ctx)
-        finally:
-            current_client_headers.reset(token)
+    def __init__(self, app):
+        self.app = app
 
-if hasattr(mcp, "middleware"):
-    mcp.middleware.append(ClientAuthHeaderMiddleware())
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            raw_headers = scope.get("headers", [])
+            headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in raw_headers}
+            odoo_headers = {k: v for k, v in headers.items() if k.startswith("x-odoo-")}
+            if odoo_headers:
+                from .odoo_client import last_client_headers
+                last_client_headers.update(odoo_headers)
+                token = current_client_headers.set(odoo_headers)
+                try:
+                    await self.app(scope, receive, send)
+                finally:
+                    current_client_headers.reset(token)
+                return
+        await self.app(scope, receive, send)
+
 
 # Register all read-only tools
 from .tools.bsc_reports import register_bsc_tools
@@ -105,10 +112,14 @@ def main():
 
     if args.transport == "sse":
         _logger.info("Listening for SSE connections on http://%s:%d/sse", args.host, args.port)
-        mcp.run(transport="sse", host=args.host, port=args.port)
+        starlette_app = mcp.sse_app(host=args.host)
+        starlette_app.add_middleware(ClientAuthHeaderMiddleware)
+        import uvicorn
+        uvicorn.run(starlette_app, host=args.host, port=args.port)
     else:
         _logger.info("Running via stdio transport...")
         mcp.run(transport="stdio")
+
 
 
 if __name__ == "__main__":

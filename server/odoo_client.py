@@ -22,10 +22,11 @@ except ImportError:
 
 _logger = logging.getLogger(__name__)
 
-# ContextVar capturing client request headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
+# ContextVar and fallback cache for client request headers (X-Odoo-User, X-Odoo-Api-Key, etc.)
 current_client_headers: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
     "current_client_headers", default={}
 )
+last_client_headers: Dict[str, str] = {}
 
 
 def resolve_connection(
@@ -38,7 +39,7 @@ def resolve_connection(
     """
     Resolves target Odoo connection parameters (URL, DB, User, API Key)
     dynamically from the client's request headers forwarded over SSE.
-    Backend server does not store or fall back to any master .env credentials.
+    Falls back to last active client headers or server configuration.
     """
     # Start with request headers captured by middleware for this async task
     headers: Dict[str, str] = dict(current_client_headers.get() or {})
@@ -56,11 +57,34 @@ def resolve_connection(
         except Exception as e:
             _logger.debug("Could not extract headers from context: %s", e)
 
-    # Strictly require credentials from client request (NO server-side fallback)
-    target_user = user or headers.get("x-odoo-user")
-    target_key = api_key or headers.get("x-odoo-api-key")
-    target_db = db or headers.get("x-odoo-db") or getattr(config, "ODOO_DB", None)
-    target_url = url or headers.get("x-odoo-url") or getattr(config, "ODOO_URL", "http://localhost:8069")
+    target_user = (
+        user
+        or headers.get("x-odoo-user")
+        or last_client_headers.get("x-odoo-user")
+        or getattr(config, "ODOO_USER", None)
+        or os.getenv("ODOO_USER")
+    )
+    target_key = (
+        api_key
+        or headers.get("x-odoo-api-key")
+        or last_client_headers.get("x-odoo-api-key")
+        or getattr(config, "ODOO_API_KEY", None)
+        or os.getenv("ODOO_API_KEY")
+    )
+    target_db = (
+        db
+        or headers.get("x-odoo-db")
+        or last_client_headers.get("x-odoo-db")
+        or getattr(config, "ODOO_DB", None)
+        or os.getenv("ODOO_DB")
+    )
+    target_url = (
+        url
+        or headers.get("x-odoo-url")
+        or last_client_headers.get("x-odoo-url")
+        or getattr(config, "ODOO_URL", "http://localhost:8069")
+        or os.getenv("ODOO_URL")
+    )
     if target_url:
         target_url = target_url.rstrip('/')
 
@@ -78,6 +102,7 @@ def resolve_connection(
         )
 
     return target_url, target_db, target_user, target_key
+
 
 
 class OdooClient:
